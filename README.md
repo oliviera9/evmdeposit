@@ -1,6 +1,6 @@
 # Steps
 
-0. Export account
+0. Export variables
 ```
 export ACCOUNT=<myaccount>
 export SENDER_WITHOUT_0X=<...> // tEVM address without leading 0x
