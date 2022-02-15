@@ -25,10 +25,7 @@ static constexpr name CORE_SYM_ACCOUNT = name("eosio.token");
 static constexpr symbol CORE_SYM = symbol("TLOS", 4);
 static constexpr name EVM_CONTRACT = name("eosio.evm");
 
-ACTION addallow(eosio::name toadd);
-ACTION delallow(eosio::name toadd);
-
-[[eosio::on_notify("eosio.token::transfer")]] void ontransfer(name from, name to, asset quantity, string memo);
+ACTION raw(std::string receiver, std::string sender);
 
 TABLE config {
     std::vector<eosio::name> allowed;

@@ -1,93 +1,65 @@
 #include "evmdeposit.hpp"
+#include <rlp/rlp.hpp>
 
 evmdeposit::evmdeposit(name self, name code, datastream<const char *> ds) : contract(self, code, ds), _accounts(EVM_CONTRACT, EVM_CONTRACT.value) {}
 
 evmdeposit::~evmdeposit() {}
 
-ACTION evmdeposit::addallow(eosio::name toadd)
+std::vector<uint8_t> to_bin(std::string binstr)
 {
-    require_auth(get_self());
-    eosio::check(is_account(toadd), "Account does not exist");
-    config_table conf(get_self(), get_self().value);
-    config cfg;
-    if (conf.exists()) {
-        cfg = conf.get();
-        auto it = cfg.allowed.begin();
-        while (it != cfg.allowed.end()) {
-            eosio::check(*it != toadd, "Account already allowed");
-            ++it;
-        }
-        cfg.allowed.emplace_back(toadd);
-    } else {
-        std::vector<eosio::name> allowed = { toadd };
-        cfg = {
-            allowed
-        };
-    }
-    conf.set(cfg, get_self());
-}
-
-ACTION evmdeposit::delallow(eosio::name todel)
-{
-    require_auth(get_self());
-    config_table conf(get_self(), get_self().value);
-    eosio::check(conf.exists(), "No conf table to del from");
-    auto config = conf.get();
-    std::vector<eosio::name> allowed = config.allowed;
-    auto it = allowed.begin();
-    bool found = false;
-    while (it != allowed.end()) {
-        if (*it == todel) {
-            it = allowed.erase(it);
-            found = true;
-        } else {
-            ++it;
-        }
-    }
-    check(found, "The todel account was not found");
-    conf.set(config, get_self());
-}
-
-void evmdeposit::ontransfer(name from, name to, asset quantity, string memo)
-{
-    name rec = get_first_receiver();
-
-    if (rec == CORE_SYM_ACCOUNT && from != get_self() && to == get_self() && quantity.symbol == CORE_SYM)
+    std::vector<uint8_t> out;
+    for (auto i = 0; i < binstr.size(); i++)
     {
-        config_table conf(get_self(), get_self().value);
-        eosio::check(conf.exists(), "No conf table to check the allowlist");
-        auto config = conf.get();
-        std::vector<eosio::name> allowed = config.allowed;
-        auto it = allowed.begin();
-        bool found = false;
-        while (it != allowed.end()) {
-            if (*it == from) {
-                found = true;
-                break;
-            } else {
-                ++it;
-            }
-        }
-        check(found, "The sending account is not allowed to use this contract");
-        check(!memo.empty(), "EVM Address is empty");
-        check(memo.length() == 42 && memo.substr(0, 2) == "0x", "EVM Address should be exactly 42 characters and begin with 0x");
-
-        eosio::checksum160 address_160 = eosio_evm::toChecksum160(memo.substr(2,42));
-        eosio::checksum256 address_256 = eosio_evm::pad160(address_160);
-        auto accounts_byaddress = _accounts.get_index<eosio::name("byaddress")>();
-        auto account = accounts_byaddress.find(address_256);
-        if (account == accounts_byaddress.end()) {
-            action(permission_level{get_self(), name("active")}, EVM_CONTRACT, name("openwallet"),
-                   make_tuple(get_self(), address_160))
-                    .send();
-        }
-
-
-        action(permission_level{get_self(), name("active")}, CORE_SYM_ACCOUNT, name("transfer"),
-               make_tuple(get_self(),
-                          EVM_CONTRACT,
-                          quantity,
-                          memo))
-                .send();
+        out.push_back((uint8_t)binstr[i]);
     }
+    return out;
+}
+std::vector<uint8_t> hex2bin(std::string hexstr)
+{
+    size_t len = hexstr.size();
+    if (len % 2 != 0)
+        return {}; // ERROR
+
+    size_t final_len = len / 2;
+    std::vector<uint8_t> chrs(final_len);
+    for (size_t i = 0, j = 0; j < final_len; i += 2, j++)
+    {
+        chrs[j] = (std::toupper(hexstr[i]) % 32 + 9) % 25 * 16 + (std::toupper(hexstr[i + 1]) % 32 + 9) % 25;
+    }
+    return chrs;
+}
+std::string bin2hex(const std::vector<uint8_t> &bin)
+{
+    std::string res;
+    const char hex[] = "0123456789abcdef";
+    for (auto byte : bin)
+    {
+        res += hex[byte >> 4];
+        res += hex[byte & 0xf];
+    }
+
+    return res;
+}
+
+ACTION evmdeposit::raw(std::string receiver, std::string sender)
+{
+    auto accounts_byaddress = _accounts.get_index<eosio::name("byaddress")>();
+    eosio::checksum160 addr_160 = eosio_evm::toChecksum160(sender.substr(2, 42));
+    eosio::checksum256 addr_256 = eosio_evm::pad160(addr_160);
+    auto account = accounts_byaddress.find(addr_256);
+    check(account != accounts_byaddress.end(), "not existing account");
+    uint256_t nonce = account == accounts_byaddress.end() ? 0 : account->get_nonce(); // A scalar value equal to the number of transactions sent by the sender;
+    uint256_t gas_price = 500000000000;                                               // A scalar value equal to the number of Wei to be paid per unit of gas for all computation costs incurred as a result of the execution of this transaction;
+    uint256_t gas_limit = 30000;                                                      // A scalar value equal to the maximum amount of gas that should be used in executing this transaction
+    std::vector<uint8_t> to = hex2bin(receiver.substr(2, 42));                        // Currently set as vector of bytes.
+    uint256_t value = 0;                                                              // A scalar value equal to the number of Wei to be transferred to the message call’s recipient or, in the case of contract creation, as an endowment to the newly created account; forma
+    std::vector<uint8_t> data = hex2bin("");                                          // An unlimited size byte array specifying the input data of the message call
+    std::string tx = rlp::encode(nonce, gas_price, gas_limit, to, value, data, 27, 0, 0);
+    // std::string tx2 = bin2hex(to_bin(tx));
+    // check(1 == 2, "invalid check " + tx2);
+    action(permission_level{get_self(), name("active")}, EVM_CONTRACT, name("raw"),
+           make_tuple(get_self(),
+                      tx,
+                      addr_160))
+        .send();
 }
